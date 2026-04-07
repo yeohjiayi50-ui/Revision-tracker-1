@@ -1,0 +1,1951 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Exam Revision Tracker</title>
+
+  <!-- Pre-mount theme: avoid flash of wrong theme -->
+  <script>
+    (function () {
+      try {
+        var s = JSON.parse(localStorage.getItem('examTracker_settings') || '{}');
+        if (s.darkMode === false) document.documentElement.classList.remove('dark');
+        if (s.accentColor) document.documentElement.style.setProperty('--accent', s.accentColor);
+        if (s.fontSize) document.documentElement.setAttribute('data-fontsize', s.fontSize);
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace']
+          },
+          colors: {
+            accent: 'var(--accent, #6366f1)'
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- React 18 + Babel for JSX -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script>
+    // Initialize Firebase
+    const firebaseApp = firebase.initializeApp({
+      apiKey: "AIzaSyA1ty8BqY6LvinyhgdGwvd6efBfPOr9smE",
+      authDomain: "revision-planner-2204c.firebaseapp.com",
+      projectId: "revision-planner-2204c",
+      storageBucket: "revision-planner-2204c.firebasestorage.app",
+      messagingSenderId: "356071874465",
+      appId: "1:356071874465:web:2183347360ce6fcba535e0",
+      measurementId: "G-VCNVKSQXKX"
+    });
+    const db = firebase.firestore();
+  </script>
+
+  <style>
+    :root { --accent: #6366f1; }
+    [data-fontsize="small"]  { font-size: 13px; }
+    [data-fontsize="medium"] { font-size: 15px; }
+    [data-fontsize="large"]  { font-size: 17px; }
+    .bg-accent  { background-color: var(--accent) !important; }
+    .text-accent { color: var(--accent) !important; }
+    .border-accent { border-color: var(--accent) !important; }
+    .ring-accent { --tw-ring-color: var(--accent) !important; }
+    textarea { resize: vertical; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
+
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useReducer, useEffect, useRef, useContext, createContext, useCallback } = React;
+
+// ─── STORAGE (Firebase Firestore) ────────────────────────────────────────────
+const STATE_KEY = 'examTracker_state';
+const SETTINGS_KEY = 'examTracker_settings';
+const FIRESTORE_DOC = db.collection('app').doc('state');
+
+// Local fallback for initial render before Firestore loads
+function loadState() {
+  try {
+    const s = localStorage.getItem(STATE_KEY);
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+}
+
+// Save to BOTH localStorage (instant) and Firestore (synced)
+function saveState(state) {
+  try {
+    localStorage.setItem(STATE_KEY, JSON.stringify(state));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+  } catch(e) { console.warn('Local storage error', e); }
+}
+
+function saveToFirestore(state) {
+  // Strip large base64 images into a separate approach if needed,
+  // but for now save the full state
+  try {
+    FIRESTORE_DOC.set({ data: JSON.stringify(state), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+      .catch(err => console.warn('Firestore write error:', err));
+  } catch(e) { console.warn('Firestore save error', e); }
+}
+
+// ─── INITIAL DATA ────────────────────────────────────────────────────────────
+const INITIAL_STATE = {
+  goals: [],
+  subjects: [
+    {
+      id: 'micro2',
+      name: 'Microeconomics 2',
+      examDate: '2026-04-21',
+      studyApproach: 'hybrid',
+      pastPapersEnabled: true,
+      pastPapersDone: false,
+      coverImage: null,
+      accentColor: '#6366f1',
+      notes: '',
+      todos: [],
+      topics: [
+        { id: 'micro2-ext', name: 'Externalities & Public Goods', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'micro2-mono', name: 'Monopoly & Monopsony', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'micro2-cap', name: 'Capturing Surplus', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'micro2-gt', name: 'Game Theory & Strategic Behaviour', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'micro2-ms', name: 'Market Structure & Competition', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'micro2-ri', name: 'Risk & Information', familiarity: 'new', status: 'not-started', notes: '' },
+      ]
+    },
+    {
+      id: 'quantfin',
+      name: 'Quantitative Finance',
+      examDate: '2026-04-22',
+      studyApproach: 'math',
+      pastPapersEnabled: true,
+      pastPapersDone: false,
+      coverImage: null,
+      accentColor: '#10b981',
+      notes: '',
+      todos: [],
+      topics: [
+        { id: 'quantfin-M01', name: 'M01', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'quantfin-M02', name: 'M02', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'quantfin-M03', name: 'M03', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'quantfin-M04', name: 'M04', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'quantfin-T01', name: 'T01', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'quantfin-T02', name: 'T02', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'quantfin-T03', name: 'T03', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'quantfin-T04', name: 'T04', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'quantfin-T05', name: 'T05', familiarity: 'new', status: 'not-started', notes: '' },
+      ]
+    },
+    {
+      id: 'peai',
+      name: 'Political Economy Analysis of Institutions',
+      examDate: '2026-04-23',
+      studyApproach: 'essay',
+      pastPapersEnabled: false,
+      pastPapersDone: false,
+      coverImage: null,
+      accentColor: '#f59e0b',
+      notes: '',
+      todos: [],
+      topics: [
+        { id: 'peai-why', name: 'Why Institutions Matter', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-evo', name: 'Analysis of Institutional Evolution', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-poldev-hist', name: 'Political Development: Historical Evidence', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-poldev-model', name: 'Political Development: Model Analysis', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-contract-var', name: 'Contract Enforcement: Variations across Countries', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-contract-theory', name: 'Contract Enforcement: Theory', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'peai-legal', name: 'Legal Development on Property Rights Security', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'peai-edu', name: 'Educational Change: Evidence & Theory', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'peai-corp', name: 'Corporate Governance: Evidence & Theory', familiarity: 'new', status: 'not-started', notes: '' },
+      ]
+    },
+    {
+      id: 'macro1',
+      name: 'Macroeconomics 1',
+      examDate: '2026-04-24',
+      studyApproach: 'hybrid',
+      pastPapersEnabled: true,
+      pastPapersDone: false,
+      coverImage: null,
+      accentColor: '#0ea5e9',
+      notes: '',
+      todos: [],
+      topics: [
+        { id: 'macro1-intro', name: 'Introduction & Measuring the Economy', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'macro1-static', name: 'Microfoundations: Static GE Model with Production', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'macro1-labour', name: 'Microfoundations: Competitive & Labour Market Equilibrium', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'macro1-dyn1', name: 'Dynamic Real Macro 1: Consumption, Savings & Ricardian Equivalence', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'macro1-dyn2', name: 'Dynamic Real Macro 2: Complete Model, Investment & Fiscal Policy', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'macro1-money', name: 'Money and the Asset Market', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'macro1-ge', name: 'General Equilibrium Framework: Money & Inflation', familiarity: 'new', status: 'not-started', notes: '' },
+      ]
+    },
+    {
+      id: 'eda',
+      name: 'Economic Development in Asia',
+      examDate: '2026-04-28',
+      studyApproach: 'essay',
+      pastPapersEnabled: false,
+      pastPapersDone: false,
+      coverImage: null,
+      accentColor: '#f43f5e',
+      notes: '',
+      todos: [],
+      topics: [
+        { id: 'eda-growth', name: 'Development and Growth', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-poverty', name: 'Poverty and Inequality', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-nutrition', name: 'Nutrition', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-savings', name: 'Savings and Self-control', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-gender', name: 'Gender', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-integration', name: 'Integration', familiarity: 'revised', status: 'not-started', notes: '' },
+        { id: 'eda-edu', name: 'Education', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'eda-labour', name: 'Labour', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'eda-gov', name: 'Government and Corruption', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'eda-demo', name: 'Demography', familiarity: 'new', status: 'not-started', notes: '' },
+        { id: 'eda-env', name: 'Environment', familiarity: 'new', status: 'not-started', notes: '' },
+      ]
+    }
+  ],
+  sessions: [],
+  dailyPlans: {},
+  calendarBlocks: [],
+  plannerNotes: [
+    { title: '', content: '' },
+    { title: '', content: '' },
+    { title: '', content: '' },
+    { title: '', content: '' },
+    { title: '', content: '' }
+  ],
+  settings: {
+    darkMode: true,
+    accentColor: '#6366f1',
+    fontSize: 'medium',
+    backgroundImage: null
+  }
+};
+
+// ─── URGENCY UTILS ───────────────────────────────────────────────────────────
+function daysUntil(isoDate) {
+  const target = new Date(isoDate + 'T12:00:00');
+  return (target.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+}
+function urgencyTier(isoDate) {
+  const d = daysUntil(isoDate);
+  if (d <= 3) return 'critical';
+  if (d <= 7) return 'warning';
+  return 'normal';
+}
+function urgencyBorderClass(tier) {
+  if (tier === 'critical') return 'border-red-500 dark:border-red-400';
+  if (tier === 'warning') return 'border-amber-500 dark:border-amber-400';
+  return 'border-blue-500 dark:border-blue-400';
+}
+function urgencyBadgeClass(tier) {
+  if (tier === 'critical') return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+  if (tier === 'warning') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+  return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
+}
+function isTopicUrgent(topic, examDate) {
+  return topic.status !== 'confident' && topic.familiarity === 'new' && daysUntil(examDate) <= 7;
+}
+function topicPriorityScore(topic, subject) {
+  if (topic.status === 'confident') return 9999;
+  const urgency = daysUntil(subject.examDate);
+  const familiarityPenalty = topic.familiarity === 'new' ? 0 : 10;
+  const statusPenalty = topic.status === 'not-started' ? 0 : 5;
+  const qfTBonus = subject.id === 'quantfin' && topic.id.includes('-T0') ? -2 : 0;
+  return urgency + familiarityPenalty + statusPenalty + qfTBonus;
+}
+function getSuggestedTopics(subjects, limit = 5) {
+  const items = [];
+  subjects.forEach(s => {
+    s.topics.forEach(t => {
+      if (t.status !== 'confident') {
+        items.push({ subject: s, topic: t, score: topicPriorityScore(t, s) });
+      }
+    });
+  });
+  items.sort((a, b) => a.score - b.score);
+  return items.slice(0, limit);
+}
+function suggestionReason(item) {
+  const d = daysUntil(item.subject.examDate);
+  const tier = urgencyTier(item.subject.examDate);
+  const parts = [];
+  if (tier === 'critical') parts.push('Exam in ≤3 days');
+  else if (tier === 'warning') parts.push('Exam in ≤7 days');
+  if (item.topic.familiarity === 'new') parts.push('New material');
+  else parts.push('Needs refresh');
+  if (item.topic.status === 'not-started') parts.push('Not started');
+  if (item.subject.id === 'quantfin' && item.topic.id.includes('-T0')) parts.push('Advanced topic');
+  return parts.join(' · ');
+}
+
+// ─── PLANNER UTILS ───────────────────────────────────────────────────────────
+function generateDayPlan(subjects, sessions, hoursPerDay = 6) {
+  const future = subjects
+    .filter(s => daysUntil(s.examDate) > 0)
+    .filter(s => s.topics.some(t => t.status !== 'confident'));
+
+  if (future.length === 0) return [];
+
+  const sorted = [...future].sort((a, b) => new Date(a.examDate) - new Date(b.examDate));
+
+  const weights = sorted.map(s => {
+    const unfinished = s.topics.filter(t => t.status !== 'confident').length;
+    let w = unfinished;
+    if (s.studyApproach === 'math' || s.studyApproach === 'hybrid') w *= 1.5;
+    const tCount = s.topics.filter(t => t.id.includes('-T0') && t.status !== 'confident').length;
+    w += tCount * 0.6;
+    const urgencyBonus = Math.max(0, 14 - daysUntil(s.examDate));
+    w += urgencyBonus * 0.3;
+    return Math.max(w, 0.1);
+  });
+
+  const total = weights.reduce((a, b) => a + b, 0);
+  const normalized = weights.map(w => Math.max((w / total) * hoursPerDay, 0.5));
+  const normTotal = normalized.reduce((a, b) => a + b, 0);
+  const scaled = normalized.map(h => Math.round((h / normTotal) * hoursPerDay * 2) / 2);
+
+  return sorted.map((s, i) => {
+    const topicItems = getSuggestedTopics([s], 4).map(item => item.topic.id);
+    return { subjectId: s.id, topicIds: topicItems, hours: scaled[i] };
+  }).filter(p => p.hours > 0);
+}
+
+function getHeatmapData(sessions, days = 7) {
+  const result = {};
+  for (let i = 0; i < days; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - (days - 1 - i));
+    result[d.toISOString().slice(0, 10)] = 0;
+  }
+  sessions.forEach(s => {
+    if (result.hasOwnProperty(s.date)) result[s.date] += s.duration;
+  });
+  return result;
+}
+
+// ─── REDUCER ─────────────────────────────────────────────────────────────────
+const A = {
+  SET_TOPIC_STATUS: 'SET_TOPIC_STATUS',
+  SET_TOPIC_NOTES: 'SET_TOPIC_NOTES',
+  SET_SUBJECT_NOTES: 'SET_SUBJECT_NOTES',
+  SET_SUBJECT_COVER: 'SET_SUBJECT_COVER',
+  SET_PAST_PAPERS_DONE: 'SET_PAST_PAPERS_DONE',
+  ADD_SESSION: 'ADD_SESSION',
+  DELETE_SESSION: 'DELETE_SESSION',
+  SET_DAY_PLAN: 'SET_DAY_PLAN',
+  SET_ACTUAL_HOURS: 'SET_ACTUAL_HOURS',
+  TOGGLE_DARK_MODE: 'TOGGLE_DARK_MODE',
+  SET_ACCENT_COLOR: 'SET_ACCENT_COLOR',
+  SET_FONT_SIZE: 'SET_FONT_SIZE',
+  SET_BACKGROUND_IMAGE: 'SET_BACKGROUND_IMAGE',
+  ADD_TODO: 'ADD_TODO',
+  UPDATE_TODO: 'UPDATE_TODO',
+  DELETE_TODO: 'DELETE_TODO',
+  TOGGLE_TODO: 'TOGGLE_TODO',
+  ADD_GOAL: 'ADD_GOAL',
+  UPDATE_GOAL: 'UPDATE_GOAL',
+  DELETE_GOAL: 'DELETE_GOAL',
+  TOGGLE_GOAL: 'TOGGLE_GOAL',
+  ADD_CALENDAR_BLOCK: 'ADD_CALENDAR_BLOCK',
+  UPDATE_CALENDAR_BLOCK: 'UPDATE_CALENDAR_BLOCK',
+  DELETE_CALENDAR_BLOCK: 'DELETE_CALENDAR_BLOCK',
+  UPDATE_SUBJECT: 'UPDATE_SUBJECT',
+  SET_PLANNER_NOTES: 'SET_PLANNER_NOTES',
+  SET_SUBJECT_QUICKNOTE: 'SET_SUBJECT_QUICKNOTE',
+};
+
+function reducer(state, action) {
+  switch (action.type) {
+    case A.SET_TOPIC_STATUS:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, topics: s.topics.map(t =>
+          t.id !== action.payload.topicId ? t : { ...t, status: action.payload.status }
+        )}
+      )};
+    case A.SET_TOPIC_NOTES:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, topics: s.topics.map(t =>
+          t.id !== action.payload.topicId ? t : { ...t, notes: action.payload.notes }
+        )}
+      )};
+    case A.SET_SUBJECT_NOTES:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, notes: action.payload.notes }
+      )};
+    case A.SET_SUBJECT_COVER:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, coverImage: action.payload.coverImage }
+      )};
+    case A.SET_PAST_PAPERS_DONE:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, pastPapersDone: action.payload.done }
+      )};
+    case A.ADD_SESSION:
+      return { ...state, sessions: [action.payload.session, ...state.sessions] };
+    case A.DELETE_SESSION:
+      return { ...state, sessions: state.sessions.filter(s => s.id !== action.payload.sessionId) };
+    case A.SET_DAY_PLAN: {
+      const existing = state.dailyPlans[action.payload.dateStr] || { planned: [], actual: [] };
+      return { ...state, dailyPlans: { ...state.dailyPlans,
+        [action.payload.dateStr]: { ...existing, planned: action.payload.plan }
+      }};
+    }
+    case A.SET_ACTUAL_HOURS: {
+      const { dateStr, subjectId, hours } = action.payload;
+      const existing = state.dailyPlans[dateStr] || { planned: [], actual: [] };
+      const actualArr = existing.actual.filter(a => a.subjectId !== subjectId);
+      if (hours > 0) actualArr.push({ subjectId, hours });
+      return { ...state, dailyPlans: { ...state.dailyPlans,
+        [dateStr]: { ...existing, actual: actualArr }
+      }};
+    }
+    case A.TOGGLE_DARK_MODE:
+      return { ...state, settings: { ...state.settings, darkMode: !state.settings.darkMode } };
+    case A.SET_ACCENT_COLOR:
+      return { ...state, settings: { ...state.settings, accentColor: action.payload.color } };
+    case A.SET_FONT_SIZE:
+      return { ...state, settings: { ...state.settings, fontSize: action.payload.size } };
+    case A.SET_BACKGROUND_IMAGE:
+      return { ...state, settings: { ...state.settings, backgroundImage: action.payload.image } };
+    case A.ADD_TODO:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, todos: [...(s.todos || []), { id: Date.now().toString(), text: action.payload.text, done: false }] }
+      )};
+    case A.UPDATE_TODO:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, todos: (s.todos || []).map(t =>
+          t.id !== action.payload.todoId ? t : { ...t, text: action.payload.text }
+        )}
+      )};
+    case A.DELETE_TODO:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, todos: (s.todos || []).filter(t => t.id !== action.payload.todoId) }
+      )};
+    case A.TOGGLE_TODO:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, todos: (s.todos || []).map(t =>
+          t.id !== action.payload.todoId ? t : { ...t, done: !t.done }
+        )}
+      )};
+    case A.ADD_GOAL:
+      return { ...state, goals: [...(state.goals || []), { id: Date.now().toString(), text: action.payload.text, deadline: action.payload.deadline, done: false }] };
+    case A.UPDATE_GOAL:
+      return { ...state, goals: (state.goals || []).map(g =>
+        g.id !== action.payload.goalId ? g : { ...g, text: action.payload.text, deadline: action.payload.deadline }
+      )};
+    case A.DELETE_GOAL:
+      return { ...state, goals: (state.goals || []).filter(g => g.id !== action.payload.goalId) };
+    case A.TOGGLE_GOAL:
+      return { ...state, goals: (state.goals || []).map(g =>
+        g.id !== action.payload.goalId ? g : { ...g, done: !g.done }
+      )};
+    case A.ADD_CALENDAR_BLOCK:
+      return { ...state, calendarBlocks: [...(state.calendarBlocks || []), action.payload.block] };
+    case A.UPDATE_CALENDAR_BLOCK:
+      return { ...state, calendarBlocks: (state.calendarBlocks || []).map(b =>
+        b.id !== action.payload.blockId ? b : { ...b, ...action.payload.updates }
+      )};
+    case A.DELETE_CALENDAR_BLOCK:
+      return { ...state, calendarBlocks: (state.calendarBlocks || []).filter(b => b.id !== action.payload.blockId) };
+    case A.UPDATE_SUBJECT:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, ...action.payload.updates }
+      )};
+    case A.SET_PLANNER_NOTES: {
+      const { index, title, content } = action.payload;
+      const notes = [...(state.plannerNotes || [{},{},{},{},{}])];
+      notes[index] = { title: title ?? notes[index]?.title ?? '', content: content ?? notes[index]?.content ?? '' };
+      return { ...state, plannerNotes: notes };
+    }
+    case A.SET_SUBJECT_QUICKNOTE:
+      return { ...state, subjects: state.subjects.map(s =>
+        s.id !== action.payload.subjectId ? s : { ...s, quickNote: action.payload.note }
+      )};
+    case '__REPLACE_STATE__':
+      return action.payload;
+    default:
+      return state;
+  }
+}
+
+// ─── CONTEXT ─────────────────────────────────────────────────────────────────
+const AppContext = createContext(null);
+function useApp() { return useContext(AppContext); }
+
+function AppProvider({ children }) {
+  const [state, dispatch] = useReducer(reducer, null, () => loadState() ?? INITIAL_STATE);
+  const [syncStatus, setSyncStatus] = useState('connecting'); // 'connected', 'connecting', 'offline'
+  const isRemoteUpdate = useRef(false);
+  const saveTimer = useRef(null);
+
+  // Save to localStorage immediately, debounce Firestore writes
+  useEffect(() => {
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
+    saveState(state);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveToFirestore(state);
+    }, 1000); // Debounce: wait 1s after last change before writing to Firestore
+  }, [state]);
+
+  // Real-time listener: sync FROM Firestore when another device makes changes
+  useEffect(() => {
+    const unsubscribe = FIRESTORE_DOC.onSnapshot(
+      (doc) => {
+        setSyncStatus('connected');
+        if (doc.exists) {
+          try {
+            const remoteState = JSON.parse(doc.data().data);
+            // Only update if the remote state is actually different
+            const localStr = JSON.stringify(state);
+            const remoteStr = doc.data().data;
+            if (localStr !== remoteStr) {
+              isRemoteUpdate.current = true;
+              // We need to replace the entire state — use a special action
+              dispatch({ type: '__REPLACE_STATE__', payload: remoteState });
+            }
+          } catch(e) { console.warn('Error parsing Firestore data:', e); }
+        }
+      },
+      (error) => {
+        console.warn('Firestore listener error:', error);
+        setSyncStatus('offline');
+      }
+    );
+    return () => unsubscribe();
+  }, []); // Only set up once
+
+  useEffect(() => {
+    const html = document.documentElement;
+    if (state.settings.darkMode) html.classList.add('dark');
+    else html.classList.remove('dark');
+    html.style.setProperty('--accent', state.settings.accentColor);
+    html.setAttribute('data-fontsize', state.settings.fontSize);
+  }, [state.settings]);
+
+  return React.createElement(AppContext.Provider, { value: { state, dispatch, syncStatus } }, children);
+}
+
+// ─── COUNTDOWN TIMER ─────────────────────────────────────────────────────────
+function CountdownTimer({ examDate }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const target = new Date(examDate + 'T12:00:00').getTime();
+  const diff = target - now;
+  if (diff <= 0) return <span className="font-mono text-xs text-gray-400">Exam complete</span>;
+
+  const d = Math.floor(diff / 86400000);
+  const h = Math.floor((diff % 86400000) / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+
+  return (
+    <span className="font-mono text-xs tabular-nums text-gray-500 dark:text-gray-400">
+      {d}d {String(h).padStart(2,'0')}h {String(m).padStart(2,'0')}m {String(s).padStart(2,'0')}s
+    </span>
+  );
+}
+
+// ─── TOPIC ITEM ───────────────────────────────────────────────────────────────
+const STATUS_CYCLE = { 'not-started': 'in-progress', 'in-progress': 'confident', 'confident': 'not-started' };
+const STATUS_ICON = {
+  'not-started': { icon: '○', cls: 'text-gray-400' },
+  'in-progress': { icon: '◑', cls: 'text-amber-500' },
+  'confident': { icon: '●', cls: 'text-green-500' }
+};
+
+function TopicItem({ topic, subjectId, examDate }) {
+  const { dispatch } = useApp();
+  const [expanded, setExpanded] = useState(false);
+  const [localNotes, setLocalNotes] = useState(topic.notes);
+  const timerRef = useRef(null);
+
+  useEffect(() => { setLocalNotes(topic.notes); }, [topic.notes]);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  function cycleStatus() {
+    dispatch({ type: A.SET_TOPIC_STATUS, payload: { subjectId, topicId: topic.id, status: STATUS_CYCLE[topic.status] } });
+  }
+
+  function handleNotesChange(e) {
+    setLocalNotes(e.target.value);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      dispatch({ type: A.SET_TOPIC_NOTES, payload: { subjectId, topicId: topic.id, notes: e.target.value } });
+    }, 500);
+  }
+
+  const urgent = isTopicUrgent(topic, examDate);
+  const si = STATUS_ICON[topic.status];
+
+  return (
+    <div className={`rounded-lg p-2.5 mb-1.5 transition-colors ${
+      topic.status === 'confident'
+        ? 'bg-green-50 dark:bg-green-900/20'
+        : topic.status === 'in-progress'
+        ? 'bg-amber-50 dark:bg-amber-900/20'
+        : 'bg-gray-50 dark:bg-gray-800/50'
+    }`}>
+      <div className="flex items-center gap-2">
+        <button onClick={cycleStatus} title="Click to cycle status"
+          className={`text-lg leading-none flex-shrink-0 hover:scale-125 transition-transform ${si.cls}`}>
+          {si.icon}
+        </button>
+        <span className={`flex-1 text-sm ${topic.status === 'confident' ? 'line-through text-gray-400 dark:text-gray-500' : ''}`}>
+          {topic.name}
+        </span>
+        {urgent && (
+          <span title="Urgent: new material, exam soon" className="text-red-500 text-xs font-bold flex-shrink-0">⚠ URGENT</span>
+        )}
+        <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+          topic.familiarity === 'new'
+            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+            : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+        }`}>
+          {topic.familiarity === 'new' ? 'New' : 'Revised'}
+        </span>
+        <button onClick={() => setExpanded(e => !e)}
+          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs flex-shrink-0 px-1">
+          {expanded ? '▲' : '▼'}
+        </button>
+      </div>
+      {expanded && (
+        <textarea
+          value={localNotes}
+          onChange={handleNotesChange}
+          placeholder="Notes for this topic..."
+          className="mt-2 w-full text-xs bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded p-2 text-gray-700 dark:text-gray-300 min-h-[60px] focus:outline-none focus:ring-1 ring-accent"
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── SUBJECT TODO LIST ────────────────────────────────────────────────────────
+function SubjectTodoList({ subject }) {
+  const { dispatch } = useApp();
+  const [expanded, setExpanded] = useState(false);
+  const [newTodo, setNewTodo] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+
+  const todos = subject.todos || [];
+
+  function handleAdd(e) {
+    e.preventDefault();
+    if (!newTodo.trim()) return;
+    dispatch({ type: A.ADD_TODO, payload: { subjectId: subject.id, text: newTodo.trim() } });
+    setNewTodo('');
+  }
+
+  function startEdit(todo) {
+    setEditingId(todo.id);
+    setEditText(todo.text);
+  }
+
+  function saveEdit() {
+    if (editText.trim()) {
+      dispatch({ type: A.UPDATE_TODO, payload: { subjectId: subject.id, todoId: editingId, text: editText.trim() } });
+    }
+    setEditingId(null);
+    setEditText('');
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter') saveEdit();
+    if (e.key === 'Escape') { setEditingId(null); setEditText(''); }
+  }
+
+  return (
+    <div>
+      <button onClick={() => setExpanded(e => !e)}
+        className="text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1">
+        {expanded ? '▲' : '▶'} Todo list {todos.length > 0 && !expanded && <span className="text-accent">({todos.filter(t => !t.done).length})</span>}
+      </button>
+      {expanded && (
+        <div className="mt-2 space-y-2">
+          {todos.map(todo => (
+            <div key={todo.id} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+              <button onClick={() => dispatch({ type: A.TOGGLE_TODO, payload: { subjectId: subject.id, todoId: todo.id } })}
+                className={`text-sm flex-shrink-0 ${todo.done ? 'text-green-500' : 'text-gray-400'}`}>
+                {todo.done ? '✓' : '○'}
+              </button>
+              {editingId === todo.id ? (
+                <input type="text" value={editText} onChange={e => setEditText(e.target.value)}
+                  onBlur={saveEdit} onKeyDown={handleKeyDown} autoFocus
+                  className="flex-1 text-sm bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-2 py-0.5 focus:outline-none focus:ring-1 ring-accent" />
+              ) : (
+                <span onClick={() => startEdit(todo)}
+                  className={`flex-1 text-sm cursor-pointer hover:text-accent ${todo.done ? 'line-through text-gray-400' : ''}`}>
+                  {todo.text}
+                </span>
+              )}
+              <button onClick={() => dispatch({ type: A.DELETE_TODO, payload: { subjectId: subject.id, todoId: todo.id } })}
+                className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 text-xs flex-shrink-0">
+                ✕
+              </button>
+            </div>
+          ))}
+          <form onSubmit={handleAdd} className="flex gap-2">
+            <input type="text" value={newTodo} onChange={e => setNewTodo(e.target.value)}
+              placeholder="Add a todo..."
+              className="flex-1 text-sm bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 ring-accent" />
+            <button type="submit" className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity">
+              Add
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SUBJECT CARD ─────────────────────────────────────────────────────────────
+const APPROACH_BADGE = {
+  math: { label: 'Math & Practice', cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+  essay: { label: 'Concept & Essay', cls: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' },
+  hybrid: { label: 'Hybrid (Math + Concepts)', cls: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' },
+};
+
+function SubjectCard({ subject }) {
+  const { dispatch } = useApp();
+  const [notesExpanded, setNotesExpanded] = useState(false);
+  const [localNotes, setLocalNotes] = useState(subject.notes);
+  const [topicsExpanded, setTopicsExpanded] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelText, setLabelText] = useState(subject.customApproachLabel || '');
+  const timerRef = useRef(null);
+  const imgInputRef = useRef(null);
+  const labelInputRef = useRef(null);
+
+  useEffect(() => { setLocalNotes(subject.notes); }, [subject.notes]);
+  useEffect(() => { setLabelText(subject.customApproachLabel || ''); }, [subject.customApproachLabel]);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  useEffect(() => { if (editingLabel && labelInputRef.current) labelInputRef.current.focus(); }, [editingLabel]);
+
+  function saveLabel() {
+    dispatch({ type: A.UPDATE_SUBJECT, payload: { subjectId: subject.id, updates: { customApproachLabel: labelText.trim() || null } } });
+    setEditingLabel(false);
+  }
+
+  function handleLabelKeyDown(e) {
+    if (e.key === 'Enter') saveLabel();
+    if (e.key === 'Escape') { setEditingLabel(false); setLabelText(subject.customApproachLabel || ''); }
+  }
+
+  const tier = urgencyTier(subject.examDate);
+  const borderCls = urgencyBorderClass(tier);
+
+  const total = subject.topics.length;
+  const confident = subject.topics.filter(t => t.status === 'confident').length;
+  const inProg = subject.topics.filter(t => t.status === 'in-progress').length;
+  const progress = Math.round((confident * 1.0 + inProg * 0.4) / total * 100);
+
+  const badge = APPROACH_BADGE[subject.studyApproach] || APPROACH_BADGE.hybrid;
+
+  function handleNotesChange(e) {
+    setLocalNotes(e.target.value);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      dispatch({ type: A.SET_SUBJECT_NOTES, payload: { subjectId: subject.id, notes: e.target.value } });
+    }, 500);
+  }
+
+  function handleImageUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { alert('Image too large (max 3MB). Try a smaller image.'); return; }
+    const canvas = document.createElement('canvas');
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const maxW = 800;
+      const scale = img.width > maxW ? maxW / img.width : 1;
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      const data = canvas.toDataURL('image/jpeg', 0.7);
+      dispatch({ type: A.SET_SUBJECT_COVER, payload: { subjectId: subject.id, coverImage: data } });
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
+
+  const examDateObj = new Date(subject.examDate + 'T12:00:00');
+  const examFmt = examDateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  return (
+    <div className={`rounded-xl border-2 ${borderCls} bg-white dark:bg-gray-800 shadow-sm overflow-hidden flex flex-col`}>
+      {/* Cover image / accent header */}
+      <div className="relative h-24 flex-shrink-0 overflow-hidden cursor-pointer group"
+        style={subject.coverImage ? {} : { backgroundColor: subject.accentColor + '33' }}
+        onClick={() => imgInputRef.current?.click()}>
+        {subject.coverImage
+          ? <img src={subject.coverImage} alt="" className="w-full h-full object-cover" />
+          : <div className="w-full h-full" style={{ background: `linear-gradient(135deg, ${subject.accentColor}55, ${subject.accentColor}22)` }} />
+        }
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+          <span className="opacity-0 group-hover:opacity-100 text-white text-xs bg-black/50 px-2 py-1 rounded transition-opacity">
+            📷 Change cover
+          </span>
+        </div>
+        <input type="file" accept="image/*" ref={imgInputRef} onChange={handleImageUpload} className="hidden" />
+      </div>
+
+      <div className="p-4 flex flex-col gap-3 flex-1">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-base leading-tight">{subject.name}</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exam: {examFmt}</p>
+          </div>
+          <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 font-medium ${urgencyBadgeClass(tier)}`}>
+            {tier === 'critical' ? '🔴 Critical' : tier === 'warning' ? '🟡 Soon' : '🔵 Upcoming'}
+          </span>
+        </div>
+
+        {/* Quick note */}
+        <input
+          type="text"
+          value={subject.quickNote || ''}
+          onChange={e => dispatch({ type: A.SET_SUBJECT_QUICKNOTE, payload: { subjectId: subject.id, note: e.target.value } })}
+          placeholder="Quick note..."
+          className="w-full text-xs bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 focus:outline-none focus:ring-1 ring-accent"
+        />
+
+        {/* Progress bar */}
+        <div>
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-gray-500 dark:text-gray-400">Progress</span>
+            <span className="font-mono font-medium">{confident}/{total} confident ({progress}%)</span>
+          </div>
+          <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${progress}%`, backgroundColor: subject.accentColor }} />
+          </div>
+        </div>
+
+        {/* Badges row */}
+        <div className="flex flex-wrap gap-1.5">
+          {editingLabel ? (
+            <input
+              ref={labelInputRef}
+              type="text"
+              value={labelText}
+              onChange={e => setLabelText(e.target.value)}
+              onBlur={saveLabel}
+              onKeyDown={handleLabelKeyDown}
+              placeholder={badge.label}
+              className={`text-xs px-2 py-0.5 rounded-full ${badge.cls} border-none outline-none bg-transparent w-32`}
+            />
+          ) : (
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full ${badge.cls} cursor-pointer hover:opacity-80`}
+              onClick={() => setEditingLabel(true)}
+              title="Click to edit label"
+            >
+              {subject.customApproachLabel || badge.label}
+            </span>
+          )}
+        </div>
+
+        {/* Topics toggle */}
+        <button onClick={() => setTopicsExpanded(e => !e)}
+          className="text-left text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1">
+          {topicsExpanded ? '▲' : '▶'} Topics ({total})
+          {subject.topics.filter(t => isTopicUrgent(t, subject.examDate)).length > 0 && (
+            <span className="ml-1 text-red-500 font-bold">
+              ⚠ {subject.topics.filter(t => isTopicUrgent(t, subject.examDate)).length} urgent
+            </span>
+          )}
+        </button>
+
+        {topicsExpanded && (
+          <div className="space-y-0">
+            {subject.topics.map(t => (
+              <TopicItem key={t.id} topic={t} subjectId={subject.id} examDate={subject.examDate} />
+            ))}
+          </div>
+        )}
+
+        {/* Subject notes */}
+        <div>
+          <button onClick={() => setNotesExpanded(e => !e)}
+            className="text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1">
+            {notesExpanded ? '▲' : '▶'} Subject notes {localNotes && !notesExpanded && <span className="text-green-500">●</span>}
+          </button>
+          {notesExpanded && (
+            <textarea
+              value={localNotes}
+              onChange={handleNotesChange}
+              placeholder="Exam strategy, key formulas, essay plans, general notes..."
+              className="mt-2 w-full text-sm bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 min-h-[100px] focus:outline-none focus:ring-1 ring-accent"
+            />
+          )}
+        </div>
+
+        {/* Todo list */}
+        <SubjectTodoList subject={subject} />
+      </div>
+    </div>
+  );
+}
+
+// ─── GOALS ───────────────────────────────────────────────────────────────────
+function Goals() {
+  const { state, dispatch } = useApp();
+  const [newGoal, setNewGoal] = useState('');
+  const [newDeadline, setNewDeadline] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [editDeadline, setEditDeadline] = useState('');
+
+  const goals = state.goals || [];
+
+  function handleAdd(e) {
+    e.preventDefault();
+    if (!newGoal.trim()) return;
+    dispatch({ type: A.ADD_GOAL, payload: { text: newGoal.trim(), deadline: newDeadline || null } });
+    setNewGoal('');
+    setNewDeadline('');
+  }
+
+  function startEdit(goal) {
+    setEditingId(goal.id);
+    setEditText(goal.text);
+    setEditDeadline(goal.deadline || '');
+  }
+
+  function saveEdit() {
+    if (editText.trim()) {
+      dispatch({ type: A.UPDATE_GOAL, payload: { goalId: editingId, text: editText.trim(), deadline: editDeadline || null } });
+    }
+    setEditingId(null);
+    setEditText('');
+    setEditDeadline('');
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter') saveEdit();
+    if (e.key === 'Escape') { setEditingId(null); setEditText(''); setEditDeadline(''); }
+  }
+
+  function formatDeadline(deadline) {
+    if (!deadline) return null;
+    return { text: deadline, isOverdue: false };
+  }
+
+  const remaining = goals.filter(g => !g.done).length;
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+      <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
+        <span>Goals</span>
+        {goals.length > 0 && (
+          <span className="text-xs font-normal text-gray-400">— {remaining} remaining</span>
+        )}
+      </h2>
+      <div className="space-y-2 max-h-48 overflow-y-auto">
+        {goals.map(goal => {
+          const dl = formatDeadline(goal.deadline);
+          return (
+          <div key={goal.id} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+            <button onClick={() => dispatch({ type: A.TOGGLE_GOAL, payload: { goalId: goal.id } })}
+              className={`text-sm flex-shrink-0 ${goal.done ? 'text-green-500' : 'text-gray-400'}`}>
+              {goal.done ? '✓' : '○'}
+            </button>
+            {editingId === goal.id ? (
+              <div className="flex-1 flex gap-2 items-center">
+                <input type="text" value={editText} onChange={e => setEditText(e.target.value)}
+                  onKeyDown={handleKeyDown} autoFocus
+                  className="flex-1 text-sm bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-2 py-0.5 focus:outline-none focus:ring-1 ring-accent" />
+                <input type="text" value={editDeadline} onChange={e => setEditDeadline(e.target.value)}
+                  placeholder="Deadline"
+                  className="text-xs bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-1 py-0.5 focus:outline-none focus:ring-1 ring-accent w-24" />
+                <button onClick={saveEdit} className="text-xs text-accent hover:underline">Save</button>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center gap-2 cursor-pointer" onClick={() => startEdit(goal)}>
+                <span className={`text-sm hover:text-accent ${goal.done ? 'line-through text-gray-400' : ''}`}>
+                  {goal.text}
+                </span>
+                {dl && (
+                  <span className={`text-xs ${dl.isOverdue && !goal.done ? 'text-red-500' : 'text-gray-400'}`}>
+                    — {dl.text}
+                  </span>
+                )}
+              </div>
+            )}
+            <button onClick={() => dispatch({ type: A.DELETE_GOAL, payload: { goalId: goal.id } })}
+              className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 text-xs flex-shrink-0">
+              ✕
+            </button>
+          </div>
+        )})}
+      </div>
+      <form onSubmit={handleAdd} className="flex gap-2 mt-3 flex-wrap">
+        <input type="text" value={newGoal} onChange={e => setNewGoal(e.target.value)}
+          placeholder="Add a goal..."
+          className="flex-1 min-w-0 text-sm bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 ring-accent" />
+        <input type="text" value={newDeadline} onChange={e => setNewDeadline(e.target.value)}
+          placeholder="Deadline"
+          className="text-xs bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 ring-accent w-24" />
+        <button type="submit" className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity">
+          Add
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ─── ACTIVITY HEATMAP ─────────────────────────────────────────────────────────
+function ActivityHeatmap() {
+  const { state } = useApp();
+  const data = getHeatmapData(state.sessions, 7);
+  const entries = Object.entries(data);
+  const maxMin = Math.max(...Object.values(data), 1);
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+      <h2 className="font-semibold text-base mb-3">7-Day Activity</h2>
+      <div className="flex gap-2 items-end h-24">
+        {entries.map(([date, minutes]) => {
+          const pct = Math.round((minutes / maxMin) * 100);
+          const d = new Date(date + 'T12:00:00');
+          const isToday = date === new Date().toISOString().slice(0, 10);
+          return (
+            <div key={date} className="flex-1 flex flex-col items-center gap-1">
+              <span className="font-mono text-xs text-gray-400">{minutes > 0 ? Math.round(minutes / 60 * 10) / 10 + 'h' : ''}</span>
+              <div className="w-full relative" style={{ height: 64 }}>
+                <div className="absolute bottom-0 left-0 right-0 rounded-t-sm transition-all duration-500"
+                  style={{
+                    height: `${Math.max(pct, 2)}%`,
+                    backgroundColor: minutes > 0 ? 'var(--accent)' : '#e5e7eb',
+                    opacity: minutes > 0 ? 0.4 + pct * 0.006 : 1
+                  }} />
+              </div>
+              <span className={`text-xs ${isToday ? 'font-bold text-accent' : 'text-gray-400'}`}>
+                {dayNames[d.getDay()]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function Dashboard() {
+  const { state } = useApp();
+  const allTopics = state.subjects.flatMap(s => s.topics);
+  const total = allTopics.length;
+  const confident = allTopics.filter(t => t.status === 'confident').length;
+  const readiness = total > 0 ? Math.round(confident / total * 100) : 0;
+  const totalMinutes = state.sessions.reduce((a, s) => a + s.duration, 0);
+  const totalHours = Math.round(totalMinutes / 60 * 10) / 10;
+  const firstExam = state.subjects.reduce((min, s) => !min || s.examDate < min ? s.examDate : min, null);
+  const daysToFirst = firstExam ? Math.max(0, Math.ceil(daysUntil(firstExam))) : 0;
+
+  const sorted = [...state.subjects].sort((a, b) => new Date(a.examDate) - new Date(b.examDate));
+
+  return (
+    <div className="space-y-6">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[
+          { label: 'Overall Readiness', value: readiness + '%', sub: `${confident}/${total} confident` },
+          { label: 'Total Study Time', value: totalHours + 'h', sub: `${state.sessions.length} sessions` },
+          { label: 'Days to First Exam', value: daysToFirst + 'd', sub: firstExam ? new Date(firstExam+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '-' },
+          { label: 'Exams Left', value: state.subjects.filter(s => daysUntil(s.examDate) > 0).length, sub: `of ${state.subjects.length} total` },
+        ].map(stat => (
+          <div key={stat.label} className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+            <p className="text-xs text-gray-500 dark:text-gray-400">{stat.label}</p>
+            <p className="font-mono text-2xl font-bold mt-1" style={{ color: 'var(--accent)' }}>{stat.value}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{stat.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Goals + heatmap */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Goals />
+        <ActivityHeatmap />
+      </div>
+
+      {/* Subject cards */}
+      <div>
+        <h2 className="font-semibold text-base mb-3">Your Exams</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {sorted.map(s => <SubjectCard key={s.id} subject={s} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CALENDAR PLANNER ─────────────────────────────────────────────────────────
+function CalendarPlanner() {
+  const { state, dispatch } = useApp();
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selecting, setSelecting] = useState(null); // { start: 'YYYY-MM-DD' }
+  const [hoverDate, setHoverDate] = useState(null);
+  const [pendingBlock, setPendingBlock] = useState(null); // { startDate, endDate } - awaiting description
+  const [blockLabel, setBlockLabel] = useState('');
+  const [blockColor, setBlockColor] = useState('#6366f1');
+  const [editingBlock, setEditingBlock] = useState(null);
+
+  const calendarBlocks = state.calendarBlocks || [];
+
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthName = currentMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
+  const days = [];
+  for (let i = 0; i < firstDay; i++) days.push(null);
+  for (let d = 1; d <= daysInMonth; d++) days.push(d);
+
+  function toDateStr(day) {
+    return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  function prevMonth() {
+    setCurrentMonth(new Date(year, month - 1, 1));
+  }
+
+  function nextMonth() {
+    setCurrentMonth(new Date(year, month + 1, 1));
+  }
+
+  function isInRange(dateStr, start, end) {
+    return dateStr >= start && dateStr <= end;
+  }
+
+  function getBlocksForDate(dateStr) {
+    return calendarBlocks.filter(b => isInRange(dateStr, b.startDate, b.endDate));
+  }
+
+  function handleDayClick(day) {
+    if (!day || pendingBlock) return;
+    const dateStr = toDateStr(day);
+    if (!selecting) {
+      setSelecting({ start: dateStr });
+    } else {
+      const start = selecting.start < dateStr ? selecting.start : dateStr;
+      const end = selecting.start < dateStr ? dateStr : selecting.start;
+      setPendingBlock({ startDate: start, endDate: end });
+      setSelecting(null);
+      setBlockLabel('');
+      setBlockColor('#6366f1');
+    }
+  }
+
+  function savePendingBlock() {
+    if (!pendingBlock) return;
+    const newBlock = {
+      id: Date.now().toString(),
+      startDate: pendingBlock.startDate,
+      endDate: pendingBlock.endDate,
+      label: blockLabel.trim() || 'Revision',
+      color: blockColor
+    };
+    dispatch({ type: A.ADD_CALENDAR_BLOCK, payload: { block: newBlock } });
+    setPendingBlock(null);
+    setBlockLabel('');
+    setBlockColor('#6366f1');
+  }
+
+  function cancelPendingBlock() {
+    setPendingBlock(null);
+    setBlockLabel('');
+    setBlockColor('#6366f1');
+  }
+
+  function cancelSelection() {
+    setSelecting(null);
+  }
+
+  function startEditBlock(block) {
+    setEditingBlock(block.id);
+    setBlockLabel(block.label || '');
+    setBlockColor(block.color || '#6366f1');
+  }
+
+  function saveBlockEdit() {
+    if (editingBlock) {
+      dispatch({ type: A.UPDATE_CALENDAR_BLOCK, payload: { blockId: editingBlock, updates: { label: blockLabel, color: blockColor } } });
+      setEditingBlock(null);
+      setBlockLabel('');
+      setBlockColor('#6366f1');
+    }
+  }
+
+  function cancelBlockEdit() {
+    setEditingBlock(null);
+    setBlockLabel('');
+    setBlockColor('#6366f1');
+  }
+
+  const isToday = (day) => {
+    if (!day) return false;
+    return toDateStr(day) === new Date().toISOString().slice(0, 10);
+  };
+
+  const getExamForDay = (day) => {
+    if (!day) return null;
+    const dateStr = toDateStr(day);
+    return state.subjects.find(s => s.examDate === dateStr);
+  };
+
+  const isSelecting = (day) => {
+    if (!day || !selecting) return false;
+    const dateStr = toDateStr(day);
+    if (!hoverDate) return dateStr === selecting.start;
+    const start = selecting.start < hoverDate ? selecting.start : hoverDate;
+    const end = selecting.start < hoverDate ? hoverDate : selecting.start;
+    return isInRange(dateStr, start, end);
+  };
+
+  const isPending = (day) => {
+    if (!day || !pendingBlock) return false;
+    const dateStr = toDateStr(day);
+    return isInRange(dateStr, pendingBlock.startDate, pendingBlock.endDate);
+  };
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold text-base">Revision Calendar</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={prevMonth} className="px-2 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded">←</button>
+          <span className="text-sm font-medium min-w-[140px] text-center">{monthName}</span>
+          <button onClick={nextMonth} className="px-2 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded">→</button>
+        </div>
+      </div>
+
+      {selecting && (
+        <div className="mb-3 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-sm flex items-center justify-between">
+          <span>Click another date to complete the range (from {selecting.start})</span>
+          <button onClick={cancelSelection} className="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500">Cancel</button>
+        </div>
+      )}
+
+      {/* Form for describing the selected period */}
+      {pendingBlock && (
+        <div className="mb-4 p-4 rounded-lg border-2 border-accent bg-accent/10">
+          <div className="text-sm font-medium mb-2">
+            Describe your plan for {pendingBlock.startDate} to {pendingBlock.endDate}
+          </div>
+          <textarea
+            value={blockLabel}
+            onChange={e => setBlockLabel(e.target.value)}
+            placeholder="What do you want to accomplish during this period? e.g., 'Focus on Microeconomics chapters 1-4, complete past papers'"
+            className="w-full text-sm bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-3 mb-3 min-h-[80px] focus:outline-none focus:ring-1 ring-accent"
+            autoFocus
+          />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Color:</span>
+              <input type="color" value={blockColor} onChange={e => setBlockColor(e.target.value)}
+                className="w-8 h-8 rounded cursor-pointer border border-gray-200 dark:border-gray-600" />
+            </div>
+            <div className="flex-1"></div>
+            <button onClick={cancelPendingBlock}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700">
+              Cancel
+            </button>
+            <button onClick={savePendingBlock}
+              className="text-sm px-4 py-1.5 rounded-lg bg-accent text-white hover:opacity-90">
+              Save Block
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-7 gap-1 mb-2">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+          <div key={d} className="text-center text-xs text-gray-400 py-1">{d}</div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((day, i) => {
+          const dateStr = day ? toDateStr(day) : null;
+          const blocks = day ? getBlocksForDate(dateStr) : [];
+          const exam = getExamForDay(day);
+          const selectingThis = isSelecting(day);
+          const pendingThis = isPending(day);
+
+          return (
+            <div key={i}
+              onClick={() => handleDayClick(day)}
+              onMouseEnter={() => day && setHoverDate(toDateStr(day))}
+              onMouseLeave={() => setHoverDate(null)}
+              className={`relative min-h-[60px] p-1 rounded-lg border cursor-pointer transition-colors ${
+                !day ? 'border-transparent cursor-default' :
+                pendingThis ? 'border-accent border-2 bg-accent/30' :
+                selectingThis ? 'border-accent bg-accent/20' :
+                isToday(day) ? 'border-accent bg-accent/10' :
+                'border-gray-100 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-500'
+              }`}>
+              {day && (
+                <>
+                  <div className={`text-xs font-mono ${isToday(day) ? 'font-bold text-accent' : 'text-gray-500'}`}>
+                    {day}
+                  </div>
+                  {exam && (
+                    <div className="mt-0.5 text-[10px] px-1 py-0.5 rounded truncate text-white font-medium"
+                      style={{ backgroundColor: exam.accentColor }}>
+                      {exam.name.split(' ').slice(0, 2).join(' ')}
+                    </div>
+                  )}
+                  {blocks.map(block => (
+                    <div key={block.id}
+                      className="mt-0.5 text-[10px] px-1 py-0.5 rounded truncate text-white"
+                      style={{ backgroundColor: block.color || '#6366f1' }}
+                      title={block.label || 'Revision block'}>
+                      {block.label ? (block.label.length > 12 ? block.label.slice(0, 12) + '...' : block.label) : 'Revision'}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Block list */}
+      {calendarBlocks.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h3 className="text-sm font-medium mb-2">Your Revision Blocks</h3>
+          <div className="space-y-2">
+            {calendarBlocks.map(block => (
+              <div key={block.id} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                {editingBlock === block.id ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={blockLabel}
+                      onChange={e => setBlockLabel(e.target.value)}
+                      placeholder="Describe this revision period..."
+                      className="w-full text-sm bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded-lg p-2 min-h-[60px] focus:outline-none"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input type="color" value={blockColor} onChange={e => setBlockColor(e.target.value)}
+                        className="w-6 h-6 rounded cursor-pointer border-0" />
+                      <span className="text-xs text-gray-400">{block.startDate} to {block.endDate}</span>
+                      <div className="flex-1"></div>
+                      <button onClick={cancelBlockEdit} className="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-600">Cancel</button>
+                      <button onClick={saveBlockEdit} className="text-xs px-2 py-1 rounded bg-accent text-white">Save</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3">
+                    <div className="w-3 h-3 rounded-full flex-shrink-0 mt-1" style={{ backgroundColor: block.color || '#6366f1' }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm">{block.label || 'Revision block'}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{block.startDate} to {block.endDate}</p>
+                    </div>
+                    <button onClick={() => startEditBlock(block)}
+                      className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex-shrink-0">Edit</button>
+                    <button onClick={() => dispatch({ type: A.DELETE_CALENDAR_BLOCK, payload: { blockId: block.id } })}
+                      className="text-xs text-gray-400 hover:text-red-400 flex-shrink-0">Delete</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!pendingBlock && !selecting && (
+        <p className="text-xs text-gray-400 mt-3">Click a date to start selecting a revision period, then click another date to complete the range.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── DAILY PLANNER ───────────────────────────────────────────────────────────
+function DailyPlanner() {
+  const { state, dispatch } = useApp();
+  const today = new Date().toISOString().slice(0, 10);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [editMode, setEditMode] = useState(false);
+  const [localPlan, setLocalPlan] = useState(null);
+  const [hoursPerDay, setHoursPerDay] = useState(6);
+
+  const savedPlan = state.dailyPlans[selectedDate];
+
+  useEffect(() => {
+    if (savedPlan) {
+      setLocalPlan(savedPlan.planned);
+    } else {
+      setLocalPlan(generateDayPlan(state.subjects, state.sessions, hoursPerDay));
+    }
+    setEditMode(false);
+  }, [selectedDate]);
+
+  function regenerate() {
+    setLocalPlan(generateDayPlan(state.subjects, state.sessions, hoursPerDay));
+    setEditMode(true);
+  }
+
+  function savePlan() {
+    dispatch({ type: A.SET_DAY_PLAN, payload: { dateStr: selectedDate, plan: localPlan } });
+    setEditMode(false);
+  }
+
+  function updatePlanHours(subjectId, newHours) {
+    setLocalPlan(lp => lp.map(p => p.subjectId === subjectId ? { ...p, hours: parseFloat(newHours) || 0 } : p));
+  }
+
+  function getSubjectName(id) {
+    return state.subjects.find(s => s.id === id)?.name || id;
+  }
+
+  const planned = localPlan || [];
+  const actual = savedPlan?.actual || [];
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <h2 className="font-semibold text-base">Daily Study Plan</h2>
+          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
+            className="text-sm border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-transparent focus:outline-none focus:ring-1 ring-accent" />
+          <div className="flex items-center gap-2 text-sm">
+            <label className="text-gray-500">Hours/day:</label>
+            <input type="number" min="1" max="16" step="0.5" value={hoursPerDay}
+              onChange={e => setHoursPerDay(parseFloat(e.target.value) || 6)}
+              className="w-16 border border-gray-200 dark:border-gray-600 rounded-lg px-2 py-1 bg-transparent focus:outline-none focus:ring-1 ring-accent" />
+          </div>
+          <button onClick={regenerate}
+            className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity">
+            Generate Plan
+          </button>
+          {editMode && (
+            <button onClick={savePlan}
+              className="text-sm px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors">
+              Save Plan
+            </button>
+          )}
+          {savedPlan && !editMode && (
+            <button onClick={() => setEditMode(true)}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+              Edit
+            </button>
+          )}
+        </div>
+
+        {/* Plan table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-500 border-b border-gray-100 dark:border-gray-700">
+                <th className="text-left py-2 pr-3">Subject</th>
+                <th className="text-right py-2 px-3">Planned (h)</th>
+                <th className="text-right py-2 px-3">Actual (h)</th>
+                <th className="text-right py-2 pl-3">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {planned.map(p => {
+                const act = actual.find(a => a.subjectId === p.subjectId);
+                const actHours = act ? act.hours : 0;
+                const delta = actHours - p.hours;
+                return (
+                  <tr key={p.subjectId} className="border-b border-gray-50 dark:border-gray-700/50">
+                    <td className="py-2 pr-3">
+                      <div>{getSubjectName(p.subjectId)}</div>
+                      {p.topicIds.length > 0 && (
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          {p.topicIds.map(tid => {
+                            const subj = state.subjects.find(s => s.id === p.subjectId);
+                            return subj?.topics.find(t => t.id === tid)?.name;
+                          }).filter(Boolean).join(', ')}
+                        </div>
+                      )}
+                    </td>
+                    <td className="text-right py-2 px-3">
+                      {editMode ? (
+                        <input type="number" min="0" max="24" step="0.5" value={p.hours}
+                          onChange={e => updatePlanHours(p.subjectId, e.target.value)}
+                          className="w-16 text-right border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 bg-transparent focus:outline-none" />
+                      ) : (
+                        <span className="font-mono">{p.hours}h</span>
+                      )}
+                    </td>
+                    <td className="text-right py-2 px-3">
+                      <input type="number" min="0" max="24" step="0.5" value={actHours || ''}
+                        placeholder="0"
+                        onChange={e => dispatch({ type: A.SET_ACTUAL_HOURS, payload: { dateStr: selectedDate, subjectId: p.subjectId, hours: parseFloat(e.target.value) || 0 } })}
+                        className="w-16 text-right border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 bg-transparent focus:outline-none font-mono" />
+                    </td>
+                    <td className={`text-right py-2 pl-3 font-mono text-xs ${delta > 0 ? 'text-green-500' : delta < 0 ? 'text-amber-500' : 'text-gray-400'}`}>
+                      {actHours > 0 ? (delta > 0 ? '+' : '') + delta.toFixed(1) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {planned.length === 0 && (
+                <tr><td colSpan={4} className="text-center py-6 text-gray-400 text-sm">Click "Generate Plan" to create a suggested study schedule</td></tr>
+              )}
+            </tbody>
+            {planned.length > 0 && (
+              <tfoot>
+                <tr className="text-xs text-gray-500 border-t border-gray-200 dark:border-gray-700">
+                  <td className="py-2 pr-3 font-medium">Total</td>
+                  <td className="text-right py-2 px-3 font-mono font-medium">{planned.reduce((a,p)=>a+p.hours,0).toFixed(1)}h</td>
+                  <td className="text-right py-2 px-3 font-mono font-medium">{actual.reduce((a,p)=>a+p.hours,0).toFixed(1)}h</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {/* Quick Notes Section */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+        <h2 className="font-semibold text-base mb-4">Planning Notes</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[0, 1, 2, 3, 4].map(i => {
+            const note = (state.plannerNotes || [])[i] || { title: '', content: '' };
+            return (
+              <div key={i} className="border border-gray-100 dark:border-gray-700 rounded-lg p-3 space-y-2">
+                <input
+                  type="text"
+                  value={note.title}
+                  onChange={e => dispatch({ type: A.SET_PLANNER_NOTES, payload: { index: i, title: e.target.value } })}
+                  placeholder={`Note ${i + 1} title...`}
+                  className="w-full text-sm font-medium bg-transparent border-b border-gray-200 dark:border-gray-600 pb-1 focus:outline-none focus:border-accent"
+                />
+                <textarea
+                  value={note.content}
+                  onChange={e => dispatch({ type: A.SET_PLANNER_NOTES, payload: { index: i, content: e.target.value } })}
+                  placeholder="Write your notes here..."
+                  rows={4}
+                  className="w-full text-sm bg-transparent border border-gray-200 dark:border-gray-600 rounded px-2 py-1.5 focus:outline-none focus:ring-1 ring-accent"
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Calendar for long-term planning */}
+      <CalendarPlanner />
+    </div>
+  );
+}
+
+// ─── SESSION LOGGER ───────────────────────────────────────────────────────────
+function SessionLogger() {
+  const { state, dispatch } = useApp();
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+  const [duration, setDuration] = useState('');
+  const [subjectId, setSubjectId] = useState(state.subjects[0]?.id || '');
+  const [topicIds, setTopicIds] = useState([]);
+  const [note, setNote] = useState('');
+
+  const selectedSubject = state.subjects.find(s => s.id === subjectId);
+
+  function toggleTopic(tid) {
+    setTopicIds(ids => ids.includes(tid) ? ids.filter(i => i !== tid) : [...ids, tid]);
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!duration || isNaN(parseInt(duration)) || parseInt(duration) <= 0) {
+      alert('Please enter a valid duration in minutes.');
+      return;
+    }
+    const session = {
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      date, duration: parseInt(duration), subjectId, topicIds, note
+    };
+    dispatch({ type: A.ADD_SESSION, payload: { session } });
+    setDuration(''); setTopicIds([]); setNote('');
+  }
+
+  const recent = state.sessions.slice(0, 10);
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+        <h2 className="font-semibold text-base mb-4">Log Study Session</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-transparent focus:outline-none focus:ring-1 ring-accent text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Duration (minutes)</label>
+              <input type="number" min="1" placeholder="e.g. 90" value={duration} onChange={e => setDuration(e.target.value)}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-transparent focus:outline-none focus:ring-1 ring-accent text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Subject</label>
+              <select value={subjectId} onChange={e => { setSubjectId(e.target.value); setTopicIds([]); }}
+                className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 ring-accent text-sm">
+                {state.subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {selectedSubject && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-2">Topics covered (optional)</label>
+              <div className="flex flex-wrap gap-2">
+                {selectedSubject.topics.map(t => (
+                  <button key={t.id} type="button"
+                    onClick={() => toggleTopic(t.id)}
+                    className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                      topicIds.includes(t.id)
+                        ? 'bg-accent text-white border-transparent'
+                        : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                    }`}>
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Note (optional)</label>
+            <input type="text" placeholder="What did you focus on?" value={note} onChange={e => setNote(e.target.value)}
+              className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-transparent focus:outline-none focus:ring-1 ring-accent text-sm" />
+          </div>
+
+          <button type="submit" className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90 transition-opacity">
+            Log Session
+          </button>
+        </form>
+      </div>
+
+      {recent.length > 0 && (
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+          <h2 className="font-semibold text-base mb-3">Recent Sessions</h2>
+          <div className="space-y-2">
+            {recent.map(s => {
+              const subj = state.subjects.find(sub => sub.id === s.subjectId);
+              const topicNames = s.topicIds.map(tid => subj?.topics.find(t => t.id === tid)?.name).filter(Boolean);
+              return (
+                <div key={s.id} className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{subj?.name || s.subjectId}</span>
+                      <span className="font-mono text-xs text-gray-500">{s.date}</span>
+                      <span className="font-mono text-xs text-gray-500">{s.duration}min</span>
+                    </div>
+                    {topicNames.length > 0 && <p className="text-xs text-gray-400 mt-0.5">{topicNames.join(', ')}</p>}
+                    {s.note && <p className="text-xs text-gray-400 mt-0.5 italic">"{s.note}"</p>}
+                  </div>
+                  <button onClick={() => dispatch({ type: A.DELETE_SESSION, payload: { sessionId: s.id } })}
+                    className="text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400 text-sm flex-shrink-0 transition-colors">
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SETTINGS ────────────────────────────────────────────────────────────────
+function Settings() {
+  const { state, dispatch } = useApp();
+  const { settings } = state;
+  const bgInputRef = useRef(null);
+  const [copied, setCopied] = useState(false);
+
+  const stateSize = Math.round(JSON.stringify(state).length / 1024);
+
+  function handleBgUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { alert('Image too large (max 3MB).'); return; }
+    const canvas = document.createElement('canvas');
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const maxW = 1920;
+      const scale = img.width > maxW ? maxW / img.width : 1;
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      dispatch({ type: A.SET_BACKGROUND_IMAGE, payload: { image: canvas.toDataURL('image/jpeg', 0.7) } });
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
+
+  function exportData() {
+    const allTopics = state.subjects.flatMap(s => s.topics);
+    const confident = allTopics.filter(t => t.status === 'confident').length;
+    const total = allTopics.length;
+    const readiness = Math.round(confident / total * 100);
+    const totalH = Math.round(state.sessions.reduce((a, s) => a + s.duration, 0) / 60 * 10) / 10;
+    const now = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    let out = `EXAM REVISION TRACKER — ${now}\n`;
+    out += `Overall readiness: ${readiness}% (${confident}/${total} topics confident)\n`;
+    out += `Total study time: ${totalH}h across ${state.sessions.length} sessions\n\n`;
+
+    state.subjects.sort((a,b) => new Date(a.examDate) - new Date(b.examDate)).forEach(s => {
+      const d = Math.ceil(daysUntil(s.examDate));
+      const examFmt = new Date(s.examDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const conf = s.topics.filter(t => t.status === 'confident').length;
+      out += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      out += `${s.name}\n`;
+      out += `Exam: ${examFmt} (${d > 0 ? d + 'd away' : 'past'})\n`;
+      out += `Approach: ${APPROACH_BADGE[s.studyApproach]?.label || s.studyApproach}`;
+      if (s.pastPapersEnabled) out += ` | Past papers: ${s.pastPapersDone ? 'done ✓' : 'pending'}`;
+      out += `\nProgress: ${conf}/${s.topics.length} confident\n`;
+      s.topics.forEach(t => {
+        const icon = t.status === 'confident' ? '✓' : t.status === 'in-progress' ? '~' : '○';
+        out += `  ${icon} [${t.familiarity === 'new' ? 'NEW' : 'REV'}] ${t.name}\n`;
+      });
+      if (s.notes) out += `Notes: ${s.notes}\n`;
+      out += '\n';
+    });
+
+    navigator.clipboard.writeText(out).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      prompt('Copy this summary:', out);
+    });
+  }
+
+  return (
+    <div className="space-y-6 max-w-lg">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-5">
+        <h2 className="font-semibold text-base">Appearance</h2>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm">Dark mode</span>
+          <button onClick={() => dispatch({ type: A.TOGGLE_DARK_MODE })}
+            className={`relative w-12 h-6 rounded-full transition-colors ${settings.darkMode ? 'bg-accent' : 'bg-gray-200 dark:bg-gray-600'}`}>
+            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${settings.darkMode ? 'translate-x-6' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm">Accent color</span>
+          <input type="color" value={settings.accentColor}
+            onChange={e => dispatch({ type: A.SET_ACCENT_COLOR, payload: { color: e.target.value } })}
+            className="w-10 h-8 rounded cursor-pointer border border-gray-200 dark:border-gray-600 bg-transparent" />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm">Font size</span>
+          <div className="flex gap-1">
+            {['small', 'medium', 'large'].map(sz => (
+              <button key={sz} onClick={() => dispatch({ type: A.SET_FONT_SIZE, payload: { size: sz } })}
+                className={`px-3 py-1 rounded text-xs border transition-colors ${
+                  settings.fontSize === sz
+                    ? 'bg-accent text-white border-transparent'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                }`}>
+                {sz.charAt(0).toUpperCase() + sz.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <span className="text-sm block">Dashboard background</span>
+            <span className="text-xs text-gray-400">Full image behind the dashboard</span>
+          </div>
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={() => bgInputRef.current?.click()}
+              className="text-xs px-3 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+              Upload
+            </button>
+            {settings.backgroundImage && (
+              <button onClick={() => dispatch({ type: A.SET_BACKGROUND_IMAGE, payload: { image: null } })}
+                className="text-xs px-3 py-1.5 border border-red-200 dark:border-red-800 text-red-500 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                Clear
+              </button>
+            )}
+            <input type="file" accept="image/*" ref={bgInputRef} onChange={handleBgUpload} className="hidden" />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
+        <h2 className="font-semibold text-base">Subjects</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Edit subject names and exam dates</p>
+        <div className="space-y-3">
+          {state.subjects.map(subject => (
+            <div key={subject.id} className="flex flex-col sm:flex-row gap-2 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+              <input
+                type="text"
+                value={subject.name}
+                onChange={e => dispatch({ type: A.UPDATE_SUBJECT, payload: { subjectId: subject.id, updates: { name: e.target.value } } })}
+                className="flex-1 text-sm bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-2 py-1.5 focus:outline-none focus:ring-1 ring-accent"
+                placeholder="Subject name"
+              />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">Exam:</label>
+                <input
+                  type="date"
+                  value={subject.examDate}
+                  onChange={e => dispatch({ type: A.UPDATE_SUBJECT, payload: { subjectId: subject.id, updates: { examDate: e.target.value } } })}
+                  className="text-sm bg-white dark:bg-gray-600 border border-gray-200 dark:border-gray-500 rounded px-2 py-1.5 focus:outline-none focus:ring-1 ring-accent"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-3">
+        <h2 className="font-semibold text-base">Data</h2>
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-sm block">Storage used</span>
+            <span className={`font-mono text-xs ${stateSize > 4000 ? 'text-red-400' : stateSize > 2000 ? 'text-amber-400' : 'text-gray-400'}`}>
+              ~{stateSize} KB {stateSize > 4000 ? '⚠ near limit' : ''}
+            </span>
+          </div>
+        </div>
+        <div>
+          <span className="text-sm block mb-2">Export progress summary</span>
+          <button onClick={exportData}
+            className={`text-sm px-4 py-2 rounded-lg transition-all ${copied ? 'bg-green-600 text-white' : 'bg-accent text-white hover:opacity-90'}`}>
+            {copied ? '✓ Copied!' : 'Copy to Clipboard'}
+          </button>
+        </div>
+        <div>
+          <span className="text-sm block mb-2 text-red-400">Danger zone</span>
+          <button onClick={() => {
+            if (confirm('This will erase ALL your progress and reset to defaults. Are you sure?')) {
+              if (confirm('This cannot be undone. All data on ALL devices will be reset. Proceed?')) {
+                localStorage.removeItem('examTracker_state');
+                localStorage.removeItem('examTracker_settings');
+                FIRESTORE_DOC.delete().catch(err => console.warn('Firestore delete error:', err));
+                window.location.reload();
+              }
+            }
+          }} className="text-sm px-4 py-2 rounded-lg border border-red-300 dark:border-red-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+            Reset All Data
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+const TABS = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'planner', label: 'Planner' },
+  { id: 'log', label: 'Log Session' },
+  { id: 'settings', label: 'Settings' },
+];
+
+function App() {
+  const { state, syncStatus } = useApp();
+  const [tab, setTab] = useState('dashboard');
+
+  const syncDot = syncStatus === 'connected' ? '🟢' : syncStatus === 'connecting' ? '🟡' : '🔴';
+  const syncLabel = syncStatus === 'connected' ? 'Synced' : syncStatus === 'connecting' ? 'Connecting...' : 'Offline';
+
+  return (
+    <div className="min-h-screen">
+      {/* Background image */}
+      {state.settings.backgroundImage && (
+        <div className="fixed inset-0 z-0 bg-cover bg-center"
+          style={{ backgroundImage: `url(${state.settings.backgroundImage})` }} />
+      )}
+
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-b border-gray-200 dark:border-gray-800">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex items-center gap-1 overflow-x-auto py-0.5">
+            <span className="font-semibold text-sm mr-3 whitespace-nowrap hidden sm:block" style={{ color: 'var(--accent)' }}>
+              Exam Tracker
+            </span>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`px-3 py-2.5 text-sm whitespace-nowrap transition-colors ${
+                  tab === t.id
+                    ? 'font-medium border-b-2 border-accent text-accent'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}>
+                {t.label}
+              </button>
+            ))}
+            <span className="ml-auto text-xs text-gray-400 flex items-center gap-1 flex-shrink-0" title={syncLabel}>
+              {syncDot} <span className="hidden sm:inline">{syncLabel}</span>
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main */}
+      <main className="relative z-10 max-w-7xl mx-auto px-4 py-6">
+        {tab === 'dashboard' && <Dashboard />}
+        {tab === 'planner' && <DailyPlanner />}
+        {tab === 'log' && <SessionLogger />}
+        {tab === 'settings' && <Settings />}
+      </main>
+    </div>
+  );
+}
+
+// ─── MOUNT ────────────────────────────────────────────────────────────────────
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  React.createElement(AppProvider, null,
+    React.createElement(App, null)
+  )
+);
+</script>
+</body>
+</html>
